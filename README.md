@@ -6,19 +6,143 @@ and searches documents when needed for answers grounded in passages with inline 
 
 Everything runs on the machine: [EmbeddingGemma 2](https://huggingface.co/google/embeddinggemma-2)
 (5-bit MLX) for retrieval and [MiniCPM5-1B](https://huggingface.co/openbmb/MiniCPM5-1B)
-(4-bit MLX) for query rewriting and answers. No API keys, no cloud calls.
+(4-bit MLX) for routing, query rewriting, and answers. No API keys or cloud inference; setup downloads dependencies and weights.
 
 Next.js 16 (App Router) · MongoDB (local) · MLX on Apple Silicon.
+
+## Run locally
+
+You need an **Apple Silicon Mac (M1 or newer)**, **Node.js 22+** (includes npm),
+**[uv](https://docs.astral.sh/uv/getting-started/installation/)**, and **MongoDB running locally**.
+The model servers use MLX; this launcher does not support Intel Macs, Windows, or Linux.
+
+### 1. Install the prerequisites
+
+If you use [Homebrew](https://brew.sh/):
+
+```bash
+brew install node uv
+brew tap mongodb/brew
+brew install mongodb-community@8.0
+```
+
+Already have Node.js, uv, or MongoDB? Skip installing those again. Use your
+installed MongoDB version in the next command.
+
+### 2. Start MongoDB locally
+
+**Start MongoDB before running the app.** For a Homebrew installation:
+
+```bash
+brew services start mongodb-community@8.0
+```
+
+Keep MongoDB running while using the app. The default connection is
+`mongodb://127.0.0.1:27017/mercor_test`. The launcher checks the connection but
+does not install, start, or stop MongoDB for you.
+See the [MongoDB macOS guide](https://www.mongodb.com/docs/v8.0/tutorial/install-mongodb-on-os-x/)
+for other installation options.
+
+### 3. Clone and run
+
+Replace `<repo-url>` with this repository's clone URL:
+
+```bash
+git clone <repo-url> mercorTest
+cd mercorTest
+npm run local
+```
+
+That's the only app command you need. It:
+
+1. Creates `.env.local` with local defaults and a generated auth secret, if missing.
+2. Installs the app dependencies and checks MongoDB.
+3. Sets up Python 3.12 environments and installs the model runtimes using uv.
+4. Downloads EmbeddingGemma 2 and MiniCPM5-1B (about **1.7 GB** of model weights).
+5. Starts the embedding server, chat server, and web app, and waits for their HTTP endpoints.
+
+Setup needs an internet connection. Allow several minutes for the first run.
+Later runs reuse the Python environments and downloaded model files, while
+checking dependencies and downloads again. Existing `.env.local` settings are preserved.
+
+When ready, open **http://localhost:3000**, upload a document, and ask a question.
+Keep the terminal open. **Press Ctrl+C to stop all three app servers.** MongoDB
+keeps running. Next time, run `npm run local` again from the repo folder.
+
+### If something goes wrong
+
+- **MongoDB connection failed:** start MongoDB locally, then retry. If you use a
+  different connection string, update `MONGODB_URI` in `.env.local`.
+- **Port already in use:** stop existing servers on `3000`, `8098`, or `8099`, then retry.
+  The launcher does not kill existing processes.
+- **Download interrupted:** run `npm run local` again; downloads can resume.
+- **A server failed:** check `.local/logs/embedding.log`, `.local/logs/chat.log`,
+  or `.local/logs/web.log`. Logs are replaced on each launch.
+- **Cannot reach the local chat server:** check that the chat server is running on
+  `127.0.0.1:8098`. Even greetings require this server because the model chooses
+  the route and generates the reply. With individual commands, run `npm run chat:serve`.
+- **No Metal device available:** MLX needs access to the Mac GPU. Run the model
+  servers in a local terminal with GPU access; a restricted sandbox may block it.
+- **Old “Searching your documents…” placeholder:** refresh the browser to load
+  the updated client. The current pending message is “Thinking…”, since retrieval
+  happens only after the model chooses search.
+
+### Individual commands (optional)
+
+After the first setup, you can also run each server in a separate terminal:
+
+```bash
+npm run embed:serve    # http://127.0.0.1:8099
+npm run chat:serve     # http://127.0.0.1:8098
+npm run dev           # http://localhost:3000
+```
+
+Use these individual commands for custom ports or model paths. The launcher uses
+the standard local URLs in [.env.example](.env.example). The model serve scripts
+also accept `EMBEDDING_MODEL_PATH` and `CHAT_MODEL_PATH` overrides.
+
+Check the models while the servers are running:
+
+```bash
+npm run embed:check
+npm run chat:check
+npm run chat:test     # regression tests; no models needed
+```
 
 ## How it works
 
 ```
 upload ──► parse ──► chunk ──► embed ──► store
 
-message ──► LLM decision ──► direct reply
-                 │
-                 └──► rewrite ──► vector + keyword ──► fuse ──► answer + citations
+message ──► LLM route decision
+                 ├── CHAT ──► LLM conversational reply
+                 └── SEARCH ──► rewrite ──► vector + keyword ──► fuse ──► LLM answer + citations
 ```
+
+Each message follows these steps:
+
+1. The UI shows the message and a “Thinking…” placeholder, then posts the
+   conversation and document IDs to `/api/chat`. The API keeps up to 30 turns.
+2. MiniCPM classifies the latest message using the conversation. It returns JSON
+   with a brief `task` and a `route` of `CHAT` or `SEARCH`. The code follows this
+   model decision; there are no greeting keyword rules. Invalid routing output
+   gets one correction attempt, then an error rather than an automatic search.
+3. For `CHAT`, a separate model call generates a plain-text reply using the
+   conversation and general knowledge. This branch skips document retrieval,
+   query embedding, and citation generation.
+4. For `SEARCH`, the app resolves the user identity, rewrites follow-up questions,
+   and searches the user's document chunks. Semantic and keyword searches run
+   in parallel, contributing up to 24 candidates each by default. Reciprocal
+   Rank Fusion selects up to eight chunks for a 12,000-character context budget.
+5. The model answers from those passages. The app validates the answer format
+   and citation number, allowing one correction attempt. No retrieved passages
+   produces the document-not-found reply without an answer-generation call.
+6. The UI replaces the placeholder with the complete reply and any source badges.
+   Responses are not streamed.
+
+The intended routing is `CHAT` for greetings and general questions, and `SEARCH`
+for requests needing uploaded documents or private facts. These are model
+judgments, not guarantees; see the routing limitation below.
 
 | Stage | Module | Notes |
 |---|---|---|
@@ -27,62 +151,10 @@ message ──► LLM decision ──► direct reply
 | Embed | `lib/rag/embed.ts` | Batched, retried, MRL-truncated and re-normalised; EmbeddingGemma 2 on `:8099` |
 | Store | `lib/rag/store.ts` | `rag_documents` + `rag_chunks`; embeddings as BSON `BinData(float32)` |
 | Retrieve | `lib/rag/search.ts` | Exact kNN over the user's chunks + MongoDB `$text`, fused with RRF |
-| Route | `lib/rag/pipeline.ts`, `lib/rag/chat.ts` | LLM decides between a direct reply and document search; direct replies skip document access |
-| Answer | `lib/rag/chat.ts`, `lib/rag/llm.ts` | Query rewrite for follow-ups, token-budgeted context, cited answer; MiniCPM5-1B on `:8098` |
+| Route | `lib/rag/pipeline.ts`, `lib/rag/chat.ts` | Model returns `CHAT` or `SEARCH`; no application greeting overrides |
+| Answer | `lib/rag/chat.ts`, `lib/rag/llm.ts` | Separate conversational or document-grounded generation; follow-up query rewriting; MiniCPM5-1B on `:8098` |
 
-## Setup
-
-```bash
-npm install
-```
-
-Three processes: the embedding server, the chat server, and Next.js. Use one
-terminal per service:
-
-```bash
-npm run embed:serve    # http://127.0.0.1:8099/v1/embeddings
-npm run chat:serve     # http://127.0.0.1:8098/v1/chat/completions
-npm run dev
-```
-
-Sanity checks:
-
-```bash
-npm run embed:check    # dimensions, prefixes and a ranking check
-npm run chat:check     # grounded answers + citations, refusal, follow-up rewrite
-npm run chat:test      # response validation regression tests (no model needed)
-```
-
-First-time setup of the two Python environments and model weights:
-
-```bash
-uv venv --python 3.12 services/embeddinggemma/.venv
-uv pip install --python services/embeddinggemma/.venv/bin/python 'mlx-vlm==0.7.11'
-
-uv venv --python 3.12 services/minicpm/.venv
-uv pip install --python services/minicpm/.venv/bin/python 'mlx-lm==0.32.2'
-
-npm run embed:download   # 1.13 GB, 5-bit EmbeddingGemma 2
-npm run chat:download    # 608 MB, 4-bit MiniCPM5-1B
-```
-
-The serve scripts use `models/embeddinggemma-2-5bit` and `models/minicpm5-1b-4bit`
-when present, and fall back to the Hugging Face cache. Override with
-`EMBEDDING_MODEL_PATH` / `CHAT_MODEL_PATH` to use another MLX conversion (for
-example `openbmb/MiniCPM5-2B` or `mlx-community/MiniCPM4.1-8B-4bit`).
-
-`.env.local` needs:
-
-```
-MONGODB_URI=mongodb://127.0.0.1:27017/mercor_test
-
-RAG_EMBEDDING_MODEL=embeddinggemma-2-5bit
-RAG_EMBEDDING_DIMENSIONS=768
-RAG_LOCAL_EMBEDDING_URL=http://127.0.0.1:8099/v1/embeddings
-
-RAG_CHAT_MODEL=minicpm5-1b-4bit
-RAG_LOCAL_CHAT_URL=http://127.0.0.1:8098/v1/chat/completions
-```
+## Configuration
 
 Optional tuning (all read from env, see `lib/rag/config.ts`):
 
@@ -91,7 +163,7 @@ Optional tuning (all read from env, see `lib/rag/config.ts`):
 | `RAG_EMBEDDING_MODEL` | `embeddinggemma-2-5bit` | Label stored on every chunk; must match the served model |
 | `RAG_EMBEDDING_DIMENSIONS` | `768` | Matryoshka truncation: 768/512/256/128 |
 | `RAG_LOCAL_EMBEDDING_URL` | `http://127.0.0.1:8099/v1/embeddings` | Local embedding server |
-| `RAG_CHAT_MODEL` | `minicpm5-1b-4bit` | Answer + query-rewrite model |
+| `RAG_CHAT_MODEL` | empty (server default) | Routing, answer, and query-rewrite model |
 | `RAG_LOCAL_CHAT_URL` | `http://127.0.0.1:8098/v1/chat/completions` | Local chat server |
 | `RAG_LOCAL_CHAT_TIMEOUT_MS` | `180000` | Per-request timeout |
 | `RAG_CHUNK_TARGET_CHARS` | `2400` | ~600 tokens |
@@ -121,6 +193,9 @@ npm run rag:smoke -- path/to/doc.pdf "what was the biggest cost driver?"
 # Verify the local servers
 npm run embed:check
 npm run chat:check
+
+# Mocked routing, retrieval-branch, and answer-validation regression tests
+npm run chat:test
 
 # Re-download model weights
 npm run embed:download
@@ -159,8 +234,13 @@ but retrieval quality drops without any error — the same silent-failure shape 
 skipping re-normalisation after MRL truncation.
 
 **The chat model runs without thinking.** MiniCPM5 is a hybrid-reasoning model.
-Answers here are extractive, so requests set `chat_template_kwargs.enable_thinking
-= false`; the `think` path would add latency and tokens for no retrieval benefit.
+Every call through `lib/rag/llm.ts` explicitly sets
+`chat_template_kwargs: { enable_thinking: false }`, including routing, direct
+replies, query rewriting, and document answers. The server launcher also sets
+`--chat-template-args '{"enable_thinking": false}'`. There is currently no
+environment-variable toggle for thinking. The routing decision is still made by
+the model; disabling thinking selects its non-thinking generation mode. Enabling
+thinking has not been validated as a fix for routing mistakes.
 
 **Citations are rendered by the app.** MiniCPM returns JSON containing answer text
 and a source number. The app validates both, retries malformed replies once,
@@ -178,6 +258,13 @@ field for media.
 
 ## Limitations / next steps
 
+- MiniCPM5-1B can misclassify the route, especially after document-related
+  conversation. A greeting may incorrectly trigger search and produce a
+  document-not-found reply; a document request may incorrectly get a direct
+  answer. Routing format validation does not check the correctness of the
+  decision. `chat:test` uses mocked model outputs and verifies application
+  behavior; `chat:check` exercises the live model, including greetings after a
+  document refusal, and can expose these mistakes.
 - Two Python sidecars, one model each. They are single-tenant; for multiple
   concurrent users, put them behind a queue or run several processes and
   load-balance.

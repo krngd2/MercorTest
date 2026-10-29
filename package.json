@@ -5,6 +5,7 @@
   "scripts": {
     "dev": "next dev",
     "local": "node scripts/start-local.mjs",
+    "local:test": "node --test scripts/start-local.test.mjs",
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
