@@ -1,5 +1,7 @@
 # Document RAG on MongoDB
 
+Source Code : https://github.com/krngd2/MercorTest
+
 A document question-answering app: upload files, they are chunked and embedded
 locally into MongoDB. The LLM replies directly to greetings and general questions,
 and searches documents when needed for answers grounded in passages with inline citations.
