@@ -39,3 +39,31 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# local models and python environments
+/models/
+/model.safetensors
+/services/*/.venv/
+model.safetensors
+models/embeddinggemma-2-5bit/.gitattributes
+models/embeddinggemma-2-5bit/chat_template.jinja
+models/embeddinggemma-2-5bit/modules.json
+models/embeddinggemma-2-5bit/preprocessor_config.json
+models/embeddinggemma-2-5bit/1_Pooling/config.json
+models/embeddinggemma-2-5bit/2_Normalize/config.json
+embeddinggemma-2-5bit/.gitattributes
+embeddinggemma-2-5bit/chat_template.jinja
+embeddinggemma-2-5bit/config_sentence_transformers.json
+embeddinggemma-2-5bit/config.json
+embeddinggemma-2-5bit/model.safetensors.index.json
+embeddinggemma-2-5bit/modules.json
+embeddinggemma-2-5bit/preprocessor_config.json
+embeddinggemma-2-5bit/processor_config.json
+embeddinggemma-2-5bit/sentence_bert_config.json
+embeddinggemma-2-5bit/tokenizer.json
+embeddinggemma-2-5bit/1_Pooling/config.json
+embeddinggemma-2-5bit/2_Normalize/config.json
+
+# Share setup defaults, but keep generated settings and logs local.
+!.env.example
+/.local/

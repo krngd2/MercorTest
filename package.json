@@ -4,14 +4,29 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
+    "local": "node scripts/start-local.mjs",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "rag:check": "tsx scripts/rag-check.ts",
+    "rag:smoke": "tsx scripts/rag-smoke.ts",
+    "rag:reset": "node --env-file-if-exists=.env.local --import tsx scripts/rag-reset.ts",
+    "embed:download": "scripts/fetch-hf.sh mlx-community/embeddinggemma-2-5bit models/embeddinggemma-2-5bit",
+    "embed:serve": "services/embeddinggemma/serve.sh",
+    "embed:check": "node --env-file-if-exists=.env.local --import tsx scripts/embed-check.ts",
+    "chat:download": "scripts/fetch-hf.sh openbmb/MiniCPM5-1B-MLX models/minicpm5-1b-4bit",
+    "chat:serve": "services/minicpm/serve.sh",
+    "chat:test": "node --import tsx --test scripts/chat.test.ts",
+    "chat:check": "node --env-file-if-exists=.env.local --import tsx scripts/chat-check.ts"
   },
   "dependencies": {
+    "@better-auth/mongo-adapter": "^1.7.14",
+    "better-auth": "^1.7.14",
+    "mongodb": "^7.7.0",
     "next": "16.4.3",
     "react": "19.3.0",
-    "react-dom": "19.3.0"
+    "react-dom": "19.3.0",
+    "unpdf": "^2.0.0"
   },
   "devDependencies": {
     "@tailwindcss/turbopack": "^4",
@@ -21,6 +36,7 @@
     "eslint": "^9",
     "eslint-config-next": "16.4.3",
     "tailwindcss": "^4",
+    "tsx": "^4.23.15",
     "typescript": "^5"
   }
 }
